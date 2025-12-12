@@ -62,6 +62,33 @@ func main() {
 	// Используем ServeMux, затем оборачиваем entire mux в CORS
 	mux := http.NewServeMux()
 
+	// auth routes
+	mux.HandleFunc("/api/auth/register", handlers.RegisterHandler)
+	mux.HandleFunc("/api/auth/login", handlers.LoginHandler)
+	mux.HandleFunc("/api/auth/refresh", handlers.RefreshHandler)
+	mux.HandleFunc("/api/auth/logout", handlers.LogoutHandler)
+
+	// cart routes (protected) — оборачиваем AuthMiddleware
+	mux.Handle("/api/cart", handlers.AuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			handlers.GetCartHandler(w, r)
+		case http.MethodPost:
+			handlers.AddToCartHandler(w, r)
+		case http.MethodPut:
+			handlers.UpdateCartHandler(w, r)
+		case http.MethodDelete:
+			// if query param product_id present -> remove single, else clear
+			if r.URL.Query().Get("product_id") != "" {
+				handlers.RemoveFromCartHandler(w, r)
+			} else {
+				handlers.ClearCartHandler(w, r)
+			}
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})))
+
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("OK"))
 	})
