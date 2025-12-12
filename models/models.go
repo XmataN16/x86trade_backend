@@ -24,6 +24,7 @@ type Category struct {
 	Description string `json:"description,omitempty"`
 	ParentID    *int   `json:"parent_id,omitempty"`
 	Slug        string `json:"slug,omitempty"`
+	ImagePath   string `json:"image_path,omitempty"`
 }
 
 // Для примера: User с минимальными полями
