@@ -182,3 +182,41 @@ func LogoutHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// Get profile
+func MeHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	u, err := repository.GetUserByID(r.Context(), userID)
+	if err != nil || u == nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(u)
+}
+
+func UpdateMeHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var payload struct {
+		FirstName string `json:"first_name"`
+		LastName  string `json:"last_name"`
+		Phone     string `json:"phone"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if err := repository.UpdateUserProfile(r.Context(), userID, payload.FirstName, payload.LastName, payload.Phone); err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

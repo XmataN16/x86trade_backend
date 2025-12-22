@@ -88,3 +88,12 @@ func GetRefreshToken(ctx context.Context, token string) (int, time.Time, error) 
 	}
 	return userID, expiresAt, nil
 }
+
+// UpdateUserProfile обновляет поля профиля (first_name, last_name, phone) для пользователя userID.
+func UpdateUserProfile(ctx context.Context, userID int, firstName, lastName, phone string) error {
+	_, err := db.DB.ExecContext(ctx,
+		`UPDATE users SET first_name=$1, last_name=$2, phone=$3 WHERE id=$4`,
+		firstName, lastName, phone, userID,
+	)
+	return err
+}
