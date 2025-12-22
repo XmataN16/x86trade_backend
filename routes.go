@@ -25,6 +25,9 @@ func SetupRoutes(r chi.Router, origins []string, allowCred bool) {
 	r.Post("/api/auth/refresh", handlers.RefreshHandler)
 	r.Post("/api/auth/logout", handlers.LogoutHandler)
 
+	// Обратная связь
+	r.Post("/api/contact", handlers.CreateContactMessageHandler)
+
 	// Продукты
 	r.Get("/api/products", handlers.GetProductsHandler)
 	r.Get("/api/products/{id}", handlers.GetProductHandler)
