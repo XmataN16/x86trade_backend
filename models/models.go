@@ -89,3 +89,21 @@ type ContactMessage struct {
 	ResponseMessage string     `json:"response_message,omitempty"`
 	ResponseAt      *time.Time `json:"response_at,omitempty"`
 }
+
+type Vacancy struct {
+	ID           int       `json:"id"`
+	Title        string    `json:"title"`
+	Description  string    `json:"description"`
+	Requirements string    `json:"requirements"`
+	Conditions   string    `json:"conditions"`
+	ContactEmail string    `json:"contact_email"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+type ProductDetail struct {
+	Product         Product                 `json:"product"`
+	Characteristics []ProductCharacteristic `json:"characteristics"`
+	Reviews         []Review                `json:"reviews"`
+	AverageRating   float64                 `json:"average_rating"`
+}

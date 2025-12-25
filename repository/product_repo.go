@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	"x86trade_backend/db"
@@ -164,4 +165,141 @@ func UpdateProduct(ctx context.Context, p *models.Product) error {
 func DeleteProduct(ctx context.Context, id int) error {
 	_, err := db.DB.ExecContext(ctx, `DELETE FROM products WHERE id=$1`, id)
 	return err
+}
+
+func GetProductDetails(ctx context.Context, productID int) (*models.ProductDetail, error) {
+	// Получаем основную информацию о товаре
+	product, err := GetProductByID(ctx, productID)
+	if err != nil {
+		log.Printf("Error getting product %d: %v", productID, err)
+		return nil, err
+	}
+	if product == nil {
+		log.Printf("Product with ID %d not found", productID)
+		return nil, nil
+	}
+
+	log.Printf("Found product: %s (ID: %d)", product.Name, productID)
+
+	// Получаем характеристики товара с обработкой ошибок
+	characteristics, err := GetProductCharacteristics(ctx, productID)
+	if err != nil {
+		log.Printf("Error getting characteristics (continuing without them): %v", err)
+		characteristics = []models.ProductCharacteristic{}
+	}
+
+	log.Printf("Characteristics count: %d", len(characteristics))
+
+	// Получаем отзывы о товаре с обработкой ошибок
+	reviews, err := GetProductReviews(ctx, productID)
+	if err != nil {
+		log.Printf("Error getting reviews (continuing without them): %v", err)
+		reviews = []models.Review{}
+	}
+
+	log.Printf("Reviews count: %d", len(reviews))
+
+	// Вычисляем средний рейтинг
+	var averageRating float64
+	if len(reviews) > 0 {
+		var totalRating int
+		for _, r := range reviews {
+			totalRating += r.Rating
+		}
+		averageRating = float64(totalRating) / float64(len(reviews))
+		log.Printf("Average rating calculated: %.2f", averageRating)
+	}
+
+	detail := &models.ProductDetail{
+		Product:         *product,
+		Characteristics: characteristics,
+		Reviews:         reviews,
+		AverageRating:   averageRating,
+	}
+
+	return detail, nil
+}
+
+func GetProductCharacteristics(ctx context.Context, productID int) ([]models.ProductCharacteristic, error) {
+	rows, err := db.DB.QueryContext(ctx, `
+        SELECT pc.id, pc.product_id, ct.name as characteristic_name, ct.unit as characteristic_unit, pc.value
+        FROM product_characteristics pc
+        LEFT JOIN characteristic_types ct ON pc.characteristic_type_id = ct.id
+        WHERE pc.product_id = $1
+        ORDER BY ct.name
+    `, productID)
+	if err != nil {
+		log.Printf("Error getting characteristics for product %d: %v", productID, err)
+		return nil, err
+	}
+	defer rows.Close()
+
+	var characteristics []models.ProductCharacteristic
+	for rows.Next() {
+		var c models.ProductCharacteristic
+		err := rows.Scan(&c.ID, &c.ProductID, &c.CharacteristicName, &c.CharacteristicUnit, &c.Value)
+		if err != nil {
+			log.Printf("Error scanning characteristic row: %v", err)
+			continue // Продолжаем даже при ошибке сканирования одной строки
+		}
+		characteristics = append(characteristics, c)
+	}
+
+	// Проверяем ошибки после цикла
+	if err := rows.Err(); err != nil {
+		log.Printf("Error after scanning characteristics: %v", err)
+		return nil, err
+	}
+
+	log.Printf("Found %d characteristics for product %d", len(characteristics), productID)
+	return characteristics, nil
+}
+
+func GetProductReviews(ctx context.Context, productID int) ([]models.Review, error) {
+	rows, err := db.DB.QueryContext(ctx, `
+        SELECT r.id, r.product_id, r.user_id, u.first_name || ' ' || u.last_name as user_name, 
+               r.rating, r.comment, r.created_at
+        FROM reviews r
+        LEFT JOIN users u ON r.user_id = u.id
+        WHERE r.product_id = $1
+        ORDER BY r.created_at DESC
+    `, productID)
+	if err != nil {
+		log.Printf("Error getting reviews for product %d: %v", productID, err)
+		return nil, err
+	}
+	defer rows.Close()
+
+	var reviews []models.Review
+	for rows.Next() {
+		var r models.Review
+		var userName sql.NullString
+		var createdAt sql.NullTime
+
+		if err := rows.Scan(&r.ID, &r.ProductID, &r.UserID, &userName, &r.Rating, &r.Comment, &createdAt); err != nil {
+			log.Printf("Error scanning review row: %v", err)
+			return nil, err
+		}
+
+		if userName.Valid {
+			r.UserName = userName.String
+		} else {
+			r.UserName = "Аноним"
+		}
+
+		if createdAt.Valid {
+			r.CreatedAt = createdAt.Time
+		}
+
+		reviews = append(reviews, r)
+	}
+
+	// Проверка ошибки после цикла
+	if err := rows.Err(); err != nil {
+		log.Printf("Error after scanning reviews: %v", err)
+		return nil, err
+	}
+
+	log.Printf("Found %d reviews for product %d", len(reviews), productID)
+	return reviews, nil
 }

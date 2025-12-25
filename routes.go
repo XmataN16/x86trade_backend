@@ -28,6 +28,9 @@ func SetupRoutes(r chi.Router, origins []string, allowCred bool) {
 	// Обратная связь
 	r.Post("/api/contact", handlers.CreateContactMessageHandler)
 
+	// Вакании
+	r.Get("/api/vacancies", handlers.GetVacanciesHandler)
+
 	// Продукты
 	r.Get("/api/products", handlers.GetProductsHandler)
 	r.Get("/api/products/{id}", handlers.GetProductHandler)
@@ -38,6 +41,9 @@ func SetupRoutes(r chi.Router, origins []string, allowCred bool) {
 	// Методы доставки и оплаты
 	r.Get("/api/delivery_methods", handlers.GetDeliveryMethodsHandler)
 	r.Get("/api/payment_methods", handlers.GetPaymentMethodsHandler)
+
+	// Характеристики товара с указанным id
+	r.Get("/api/products/{id}/details", handlers.GetProductDetailsHandler)
 
 	// Защищенные роуты (требуют аутентификации)
 	r.Group(func(r chi.Router) {
@@ -59,5 +65,7 @@ func SetupRoutes(r chi.Router, origins []string, allowCred bool) {
 		// Профиль
 		r.Get("/api/auth/me", handlers.MeHandler)
 		r.Put("/api/auth/me", handlers.UpdateMeHandler)
+
+		r.Post("/api/reviews", handlers.CreateReviewHandler)
 	})
 }
