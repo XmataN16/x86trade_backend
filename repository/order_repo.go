@@ -185,3 +185,54 @@ func GetOrderDelivery(ctx context.Context, orderID int) (*models.OrderDelivery, 
 
 	return &delivery, nil
 }
+
+// GetOrdersWithPagination возвращает список заказов с пагинацией
+func GetOrdersWithPagination(ctx context.Context, limit, offset int) ([]models.Order, error) {
+	q := `SELECT id, user_id, status, total_amount, created_at, updated_at, comment 
+		  FROM orders ORDER BY created_at DESC LIMIT $1 OFFSET $2`
+
+	rows, err := db.DB.QueryContext(ctx, q, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var orders []models.Order
+	for rows.Next() {
+		var o models.Order
+		var created, updated sql.NullTime
+
+		if err := rows.Scan(&o.ID, &o.UserID, &o.Status, &o.TotalAmount, &created, &updated, &o.Comment); err != nil {
+			return nil, err
+		}
+
+		if created.Valid {
+			o.CreatedAt = created.Time
+		}
+		if updated.Valid {
+			o.UpdatedAt = updated.Time
+		}
+
+		orders = append(orders, o)
+	}
+
+	return orders, nil
+}
+
+// CountOrders возвращает общее количество заказов
+func CountOrders(ctx context.Context) (int, error) {
+	var count int
+	err := db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM orders`).Scan(&count)
+	return count, err
+}
+
+// UpdateOrderStatus обновляет статус заказа
+func UpdateOrderStatus(ctx context.Context, orderID int, status string) error {
+	_, err := db.DB.ExecContext(ctx, `
+		UPDATE orders 
+		SET status = $1, updated_at = NOW() 
+		WHERE id = $2
+	`, status, orderID)
+
+	return err
+}

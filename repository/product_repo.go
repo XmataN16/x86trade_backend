@@ -3,16 +3,15 @@ package repository
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"x86trade_backend/db"
 	"x86trade_backend/models"
 )
 
-// ProductFilter расширён: теперь можно фильтровать по имени категории / производителя
 type ProductFilter struct {
 	CategoryID       *int
 	CategoryName     *string
@@ -20,13 +19,18 @@ type ProductFilter struct {
 	ManufacturerName *string
 	MinPrice         *float64
 	MaxPrice         *float64
-	Q                *string // search in name/description
+	Q                *string
 	Limit            int
 	Offset           int
 }
 
 func GetProducts(ctx context.Context, f *ProductFilter) ([]models.Product, error) {
-	base := `SELECT p.id, p.name, p.description, p.price, p.category_id, COALESCE(c.name,''), p.manufacturer_id, COALESCE(m.name,''), p.image_path, p.stock_quantity, p.sku, p.created_at, p.updated_at
+	base := `SELECT p.id, p.name, p.description, p.price, p.category_id, 
+                    COALESCE(c.name,'') AS category_name, 
+                    p.manufacturer_id, 
+                    COALESCE(m.name,'') AS manufacturer_name, 
+                    p.image_path, p.stock_quantity, p.sku, 
+                    p.created_at, p.updated_at
              FROM products p
              LEFT JOIN categories c ON p.category_id = c.id
              LEFT JOIN manufacturers m ON p.manufacturer_id = m.id`
@@ -42,7 +46,7 @@ func GetProducts(ctx context.Context, f *ProductFilter) ([]models.Product, error
 		}
 		if f.CategoryName != nil && strings.TrimSpace(*f.CategoryName) != "" {
 			conds = append(conds, fmt.Sprintf("c.name ILIKE $%d", i))
-			args = append(args, "%"+*f.CategoryName+"%")
+			args = append(args, "%"+strings.TrimSpace(*f.CategoryName)+"%")
 			i++
 		}
 		if f.ManufacturerID != nil {
@@ -52,7 +56,7 @@ func GetProducts(ctx context.Context, f *ProductFilter) ([]models.Product, error
 		}
 		if f.ManufacturerName != nil && strings.TrimSpace(*f.ManufacturerName) != "" {
 			conds = append(conds, fmt.Sprintf("m.name ILIKE $%d", i))
-			args = append(args, "%"+*f.ManufacturerName+"%")
+			args = append(args, "%"+strings.TrimSpace(*f.ManufacturerName)+"%")
 			i++
 		}
 		if f.MinPrice != nil {
@@ -66,8 +70,9 @@ func GetProducts(ctx context.Context, f *ProductFilter) ([]models.Product, error
 			i++
 		}
 		if f.Q != nil && strings.TrimSpace(*f.Q) != "" {
+			search := "%" + strings.TrimSpace(*f.Q) + "%"
 			conds = append(conds, fmt.Sprintf("(p.name ILIKE $%d OR p.description ILIKE $%d)", i, i+1))
-			args = append(args, "%"+*f.Q+"%", "%"+*f.Q+"%")
+			args = append(args, search, search)
 			i += 2
 		}
 	}
@@ -85,9 +90,14 @@ func GetProducts(ctx context.Context, f *ProductFilter) ([]models.Product, error
 		base = base + fmt.Sprintf(" OFFSET %d", f.Offset)
 	}
 
+	// Добавляем логирование для отладки
+	log.Printf("Executing query: %s", base)
+	log.Printf("With args: %v", args)
+
 	rows, err := db.DB.QueryContext(ctx, base, args...)
 	if err != nil {
-		return nil, err
+		log.Printf("Error executing query: %v", err)
+		return nil, fmt.Errorf("database query error: %w", err)
 	}
 	defer rows.Close()
 
@@ -95,15 +105,35 @@ func GetProducts(ctx context.Context, f *ProductFilter) ([]models.Product, error
 	for rows.Next() {
 		var p models.Product
 		var created, updated sql.NullTime
-		var categoryName, manufacturerName sql.NullString
-		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Price, &p.CategoryID, &categoryName, &p.ManufacturerID, &manufacturerName, &p.ImagePath, &p.StockQuantity, &p.SKU, &created, &updated); err != nil {
-			return nil, err
+		var categoryName, manufacturerName, description, imagePath, sku sql.NullString
+		var stockQuantity sql.NullInt64
+
+		err := rows.Scan(&p.ID, &p.Name, &description, &p.Price, &p.CategoryID,
+			&categoryName, &p.ManufacturerID, &manufacturerName,
+			&imagePath, &stockQuantity, &sku, &created, &updated)
+		if err != nil {
+			log.Printf("Error scanning row: %v", err)
+			return nil, fmt.Errorf("row scan error: %w", err)
+		}
+
+		// Обработка NULL значений
+		if description.Valid {
+			p.Description = description.String
 		}
 		if categoryName.Valid {
 			p.CategoryName = categoryName.String
 		}
 		if manufacturerName.Valid {
 			p.ManufacturerName = manufacturerName.String
+		}
+		if imagePath.Valid {
+			p.ImagePath = imagePath.String
+		}
+		if sku.Valid {
+			p.SKU = sku.String
+		}
+		if stockQuantity.Valid {
+			p.StockQuantity = int(stockQuantity.Int64)
 		}
 		if created.Valid {
 			p.CreatedAt = created.Time
@@ -113,29 +143,52 @@ func GetProducts(ctx context.Context, f *ProductFilter) ([]models.Product, error
 		}
 		out = append(out, p)
 	}
+
+	// Проверяем ошибки после цикла
+	if err := rows.Err(); err != nil {
+		log.Printf("Error iterating rows: %v", err)
+		return nil, fmt.Errorf("rows iteration error: %w", err)
+	}
+
 	return out, nil
 }
 
+// GetProductByID возвращает продукт по id (nil, nil если не найден).
 func GetProductByID(ctx context.Context, id int) (*models.Product, error) {
+	q := `SELECT id, name, sku, description, price, category_id, manufacturer_id, image_path, stock_quantity, created_at, updated_at 
+          FROM products WHERE id=$1`
 	var p models.Product
-	row := db.DB.QueryRowContext(ctx, `SELECT p.id, p.name, p.description, p.price, p.category_id, COALESCE(c.name,''), p.manufacturer_id, COALESCE(m.name,''), p.image_path, p.stock_quantity, p.sku, p.created_at, p.updated_at
-        FROM products p
-        LEFT JOIN categories c ON p.category_id=c.id
-        LEFT JOIN manufacturers m ON p.manufacturer_id=m.id
-        WHERE p.id=$1`, id)
+	var description, imagePath, sku sql.NullString
+	var categoryID, manufacturerID, stockQuantity sql.NullInt64
 	var created, updated sql.NullTime
-	var categoryName, manufacturerName sql.NullString
-	if err := row.Scan(&p.ID, &p.Name, &p.Description, &p.Price, &p.CategoryID, &categoryName, &p.ManufacturerID, &manufacturerName, &p.ImagePath, &p.StockQuantity, &p.SKU, &created, &updated); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
+
+	err := db.DB.QueryRowContext(ctx, q, id).Scan(&p.ID, &p.Name, &sku, &description, &p.Price,
+		&categoryID, &manufacturerID, &imagePath, &stockQuantity, &created, &updated)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
 		return nil, err
 	}
-	if categoryName.Valid {
-		p.CategoryName = categoryName.String
+
+	// Обработка NULL значений
+	if description.Valid {
+		p.Description = description.String
 	}
-	if manufacturerName.Valid {
-		p.ManufacturerName = manufacturerName.String
+	if categoryID.Valid {
+		p.CategoryID = int(categoryID.Int64)
+	}
+	if manufacturerID.Valid {
+		p.ManufacturerID = int(manufacturerID.Int64)
+	}
+	if imagePath.Valid {
+		p.ImagePath = imagePath.String
+	}
+	if stockQuantity.Valid {
+		p.StockQuantity = int(stockQuantity.Int64)
+	}
+	if sku.Valid {
+		p.SKU = sku.String
 	}
 	if created.Valid {
 		p.CreatedAt = created.Time
@@ -143,28 +196,79 @@ func GetProductByID(ctx context.Context, id int) (*models.Product, error) {
 	if updated.Valid {
 		p.UpdatedAt = updated.Time
 	}
+
 	return &p, nil
 }
 
-func CreateProduct(ctx context.Context, p *models.Product) (int, error) {
-	var id int
-	err := db.DB.QueryRowContext(ctx, `INSERT INTO products (name, description, price, category_id, manufacturer_id, image_path, stock_quantity, sku) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
-		p.Name, p.Description, p.Price, p.CategoryID, p.ManufacturerID, p.ImagePath, p.StockQuantity, p.SKU).Scan(&id)
+// GetAllProducts возвращает все продукты (без пагинации). Можно позже расширить limit/offset.
+func GetAllProducts(ctx context.Context) ([]models.Product, error) {
+	q := `SELECT id, name, sku, description, price, category_id, manufacturer_id, image_path, stock_quantity, created_at FROM products ORDER BY id`
+	rows, err := db.DB.QueryContext(ctx, q)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return id, nil
+	defer rows.Close()
+	var out []models.Product
+	for rows.Next() {
+		var p models.Product
+		var categoryID sql.NullInt64
+		var manufacturerID sql.NullInt64
+		var imgPath sql.NullString
+		var stock_quantity sql.NullInt64
+		var created sql.NullTime
+		if err := rows.Scan(&p.ID, &p.Name, &p.SKU, &p.Description, &p.Price, &categoryID, &manufacturerID, &imgPath, &stock_quantity, &created); err != nil {
+			return nil, err
+		}
+		if categoryID.Valid {
+			p.CategoryID = int(categoryID.Int64)
+		}
+		if manufacturerID.Valid {
+			p.ManufacturerID = int(manufacturerID.Int64)
+		}
+		if imgPath.Valid {
+			p.ImagePath = imgPath.String
+		}
+		if stock_quantity.Valid {
+			p.StockQuantity = int(stock_quantity.Int64)
+		}
+		if created.Valid {
+			p.CreatedAt = created.Time
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }
 
+// CreateProduct вставляет новый продукт и возвращает id.
+func CreateProduct(ctx context.Context, p *models.Product) (int, error) {
+	q := `INSERT INTO products (name, sku, description, price, category_id, image_path, stock_quantity, manufacturer_id, created_at)
+	      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`
+	var id int
+	now := time.Now().UTC()
+	err := db.DB.QueryRowContext(ctx, q,
+		p.Name, p.SKU, p.Description, p.Price, nullableInt(p.CategoryID), p.ImagePath, p.StockQuantity, nullableInt(p.ManufacturerID), now).Scan(&id)
+	return id, err
+}
+
+// UpdateProduct обновляет поля продукта по id.
 func UpdateProduct(ctx context.Context, p *models.Product) error {
-	_, err := db.DB.ExecContext(ctx, `UPDATE products SET name=$1, description=$2, price=$3, category_id=$4, manufacturer_id=$5, image_path=$6, stock_quantity=$7, sku=$8, updated_at = CURRENT_TIMESTAMP WHERE id=$9`,
-		p.Name, p.Description, p.Price, p.CategoryID, p.ManufacturerID, p.ImagePath, p.StockQuantity, p.SKU, p.ID)
+	q := `UPDATE products SET name=$1, sku=$2, description=$3, price=$4, category_id=$5, manufacturer_id=$6, image_path=$7, stock_quantity=$8 WHERE id=$9`
+	_, err := db.DB.ExecContext(ctx, q, p.Name, p.SKU, p.Description, p.Price, nullableInt(p.CategoryID), nullableInt(p.ManufacturerID), p.ImagePath, p.StockQuantity, p.ID)
 	return err
 }
 
+// DeleteProduct удаляет продукт по id.
 func DeleteProduct(ctx context.Context, id int) error {
 	_, err := db.DB.ExecContext(ctx, `DELETE FROM products WHERE id=$1`, id)
 	return err
+}
+
+// helper: чтобы передавать NULL для 0 (если в вашей модели 0 означает пусто)
+func nullableInt(v int) interface{} {
+	if v == 0 {
+		return nil
+	}
+	return v
 }
 
 func GetProductDetails(ctx context.Context, productID int) (*models.ProductDetail, error) {
